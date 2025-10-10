@@ -283,5 +283,17 @@ def delete_customer(customer_id):
     connection.close()
     return jsonify({"message": "Customer deleted"})
 
+@app.route("/api/return/<int:rental_id>", methods=["PUT"])
+def return_film(rental_id):
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("UPDATE rental SET return_date=NOW() WHERE rental_id=%s", (rental_id,))
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+    return jsonify({"message": "Film returned"})
+
 if __name__ == "__main__":
     app.run(debug=True)
