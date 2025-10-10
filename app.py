@@ -218,5 +218,70 @@ def get_customers():
         "total_pages": (total + per_page - 1) // per_page
     })
 
+@app.route("/api/customers", methods=["POST"])
+def add_customer():
+    data = request.get_json()
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    query = """
+        INSERT INTO customer (store_id, first_name, last_name, email, address_id, create_date, active)
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+    """
+    cursor.execute(query, (
+        data["store_id"], 
+        data["first_name"], 
+        data["last_name"], 
+        data["email"], 
+        data["address_id"], 
+        data.get("active", 1)
+    ))
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    return jsonify({"message": "Customer added successfully"})
+
+
+@app.route("/api/customers/<int:customer_id>", methods=["PUT"])
+def edit_customer(customer_id):
+    data = request.get_json()
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    query = """
+        UPDATE customer
+        SET first_name=%s, last_name=%s, email=%s, address_id=%s, active=%s
+        WHERE customer_id=%s
+    """
+    cursor.execute(query, (
+        data["first_name"], 
+        data["last_name"], 
+        data["email"], 
+        data["address_id"], 
+        data.get("active", 1),
+        customer_id
+    ))
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    return jsonify({"message": "Customer updated"})
+
+
+@app.route("/api/customers/<int:customer_id>", methods=["DELETE"])
+def delete_customer(customer_id):
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("DELETE FROM customer WHERE customer_id=%s", (customer_id,))
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+    return jsonify({"message": "Customer deleted"})
+
 if __name__ == "__main__":
     app.run(debug=True)
