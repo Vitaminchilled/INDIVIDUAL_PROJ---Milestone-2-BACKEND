@@ -81,15 +81,16 @@ def get_film_details(film_id):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
-    query = """
+    film_query = """
         SELECT f.film_id, f.title, f.description, f.release_year, l.name as language, f.rating
         FROM film f
         JOIN language l ON f.language_id = l.language_id
         WHERE f.film_id = %s
     """
-    cursor.execute(query, (film_id,))
-    result = cursor.fetchone()
-        genre_query = """
+    cursor.execute(film_query, (film_id,))
+    film = cursor.fetchone()
+
+    genre_query = """
         SELECT c.name AS category
         FROM film_category fc
         JOIN category c ON fc.category_id = c.category_id
@@ -109,10 +110,14 @@ def get_film_details(film_id):
     """
     cursor.execute(actor_query, (film_id,))
     actors = cursor.fetchall()
-    
+
     cursor.close()
     connection.close()
-    return jsonify(result)
+
+    return jsonify({
+        "film": film,
+        "actors": actors
+    })
 
 @app.route("/api/top-actors")
 def get_top_actors():
