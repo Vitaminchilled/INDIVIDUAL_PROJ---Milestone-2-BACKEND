@@ -169,7 +169,6 @@ def get_actor_details(actor_id):
 
 @app.route("/api/rent", methods=["POST"])
 def rent_film():
-    from flask import request
     data = request.get_json()
     customer_id = data.get("customer_id")
     inventory_id = data.get("inventory_id")
@@ -187,7 +186,6 @@ def rent_film():
 
 @app.route("/api/customers")
 def get_customers():
-    from flask import request
     page = int(request.args.get("page", 1))
     per_page = int(request.args.get("per_page", 20))
     offset = (page - 1) * per_page
