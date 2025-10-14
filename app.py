@@ -50,7 +50,6 @@ def search_films():
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
-    # Search in film titles, descriptions, actor names, and category names
     query = """
         SELECT DISTINCT f.film_id, f.title, f.description
         FROM film f
@@ -81,15 +80,16 @@ def get_film_details(film_id):
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
-    query = """
+    film_query = """
         SELECT f.film_id, f.title, f.description, f.release_year, l.name as language, f.rating
         FROM film f
         JOIN language l ON f.language_id = l.language_id
         WHERE f.film_id = %s
     """
-    cursor.execute(query, (film_id,))
-    result = cursor.fetchone()
-        genre_query = """
+    cursor.execute(film_query, (film_id,))
+    film = cursor.fetchone()
+
+    genre_query = """
         SELECT c.name AS category
         FROM film_category fc
         JOIN category c ON fc.category_id = c.category_id
@@ -109,10 +109,14 @@ def get_film_details(film_id):
     """
     cursor.execute(actor_query, (film_id,))
     actors = cursor.fetchall()
-    
+
     cursor.close()
     connection.close()
-    return jsonify(result)
+
+    return jsonify({
+        "film": film,
+        "actors": actors
+    })
 
 @app.route("/api/top-actors")
 def get_top_actors():
@@ -166,45 +170,114 @@ def get_actor_details(actor_id):
 
     return jsonify({"actor": actor, "top_films": films})
 
-
 @app.route("/api/rent", methods=["POST"])
-def rent_film():
-    from flask import request
+def rent_movie():
     data = request.get_json()
     customer_id = data.get("customer_id")
     inventory_id = data.get("inventory_id")
 
-    connection = get_db_connection()
-    cursor = connection.cursor()
-
-    query = "INSERT INTO rental (rental_date, inventory_id, customer_id, staff_id) VALUES (NOW(), %s, %s, 1)"
-    cursor.execute(query, (inventory_id, customer_id))
-    connection.commit()
-
-    cursor.close()
-    connection.close()
-    return jsonify({"message": "Film rented successfully"})
-
-@app.route("/api/customers")
-def get_customers():
-    from flask import request
-    page = int(request.args.get("page", 1))
-    per_page = int(request.args.get("per_page", 20))
-    offset = (page - 1) * per_page
+    if not customer_id or not inventory_id:
+        return jsonify({"message": "Missing customer_id or inventory_id"}), 400
 
     connection = get_db_connection()
     cursor = connection.cursor(dictionary=True)
 
-    cursor.execute("SELECT COUNT(*) AS total FROM customer")
+    try:
+        cursor.execute("""
+            SELECT i.inventory_id
+            FROM inventory i
+            LEFT JOIN rental r 
+                ON i.inventory_id = r.inventory_id 
+                AND r.return_date IS NULL
+            WHERE i.inventory_id = %s AND r.rental_id IS NULL
+        """, (inventory_id,))
+        available = cursor.fetchone()
+
+        if not available:
+            cursor.close()
+            connection.close()
+            return jsonify({"message": "Sorry, this film copy is no longer available."}), 400
+
+        cursor.execute("""
+            INSERT INTO rental (rental_date, inventory_id, customer_id, staff_id)
+            VALUES (NOW(), %s, %s, 1)
+        """, (inventory_id, customer_id))
+        connection.commit()
+
+        cursor.close()
+        connection.close()
+
+        return jsonify({"message": "Film successfully rented!"}), 200
+
+    except Exception as e:
+        connection.rollback()
+        cursor.close()
+        connection.close()
+        return jsonify({"message": f"Error: {str(e)}"}), 500
+
+
+@app.route("/api/check_availability/<int:film_id>", methods=["GET"])
+def check_availability(film_id):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT i.inventory_id, i.store_id
+        FROM inventory i
+        LEFT JOIN rental r 
+            ON i.inventory_id = r.inventory_id 
+            AND r.return_date IS NULL
+        WHERE i.film_id = %s AND r.rental_id IS NULL
+    """, (film_id,))
+    available_copies = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    if not available_copies:
+        return jsonify({
+            "available": False,
+            "message": "This film is currently not available for rent."
+        })
+
+    return jsonify({
+        "available": True,
+        "copies": available_copies,
+        "message": f"{len(available_copies)} copy(ies) available."
+    })
+
+
+@app.route("/api/customers", methods=["GET"])
+def get_customers():
+    page = int(request.args.get("page", 1))
+    per_page = int(request.args.get("per_page", 20))
+    offset = (page - 1) * per_page
+
+    search = request.args.get("search")
+
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    query = "SELECT customer_id, first_name, last_name, email, active FROM customer WHERE 1=1"
+    params = []
+
+    if search:
+        if search.isdigit():
+            query += " AND (customer_id = %s OR first_name LIKE %s OR last_name LIKE %s)"
+            like_pattern = f"%{search}%"
+            params.extend([int(search), like_pattern, like_pattern])
+        else:
+            query += " AND (first_name LIKE %s OR last_name LIKE %s)"
+            like_pattern = f"%{search}%"
+            params.extend([like_pattern, like_pattern])
+
+    cursor.execute("SELECT COUNT(*) AS total FROM (" + query + ") AS count_query", params)
     total = cursor.fetchone()["total"]
 
-    query = """
-        SELECT customer_id, first_name, last_name, email, active
-        FROM customer
-        ORDER BY customer_id
-        LIMIT %s OFFSET %s
-    """
-    cursor.execute(query, (per_page, offset))
+    query += " ORDER BY customer_id LIMIT %s OFFSET %s"
+    params.extend([per_page, offset])
+
+    cursor.execute(query, params)
     customers = cursor.fetchall()
 
     cursor.close()
@@ -217,6 +290,127 @@ def get_customers():
         "total": total,
         "total_pages": (total + per_page - 1) // per_page
     })
+
+
+@app.route("/api/customers", methods=["POST"])
+def add_customer():
+    data = request.get_json()
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    query = """
+        INSERT INTO customer (store_id, first_name, last_name, email, address_id, create_date, active)
+        VALUES (%s, %s, %s, %s, %s, NOW(), %s)
+    """
+    cursor.execute(query, (
+        data["store_id"], 
+        data["first_name"], 
+        data["last_name"], 
+        data["email"], 
+        data["address_id"], 
+        data.get("active", 1)
+    ))
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    return jsonify({"message": "Customer added successfully"})
+
+
+@app.route("/api/customers/<int:customer_id>", methods=["PUT"])
+def edit_customer(customer_id):
+    data = request.get_json()
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    query = """
+        UPDATE customer
+        SET first_name=%s, last_name=%s, email=%s, address_id=%s, active=%s
+        WHERE customer_id=%s
+    """
+    cursor.execute(query, (
+        data["first_name"], 
+        data["last_name"], 
+        data["email"], 
+        data["address_id"], 
+        data.get("active", 1),
+        customer_id
+    ))
+
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+    return jsonify({"message": "Customer updated"})
+
+
+@app.route("/api/customers/<int:customer_id>", methods=["DELETE"])
+def delete_customer(customer_id):
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("DELETE FROM customer WHERE customer_id=%s", (customer_id,))
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+    return jsonify({"message": "Customer deleted"})
+
+
+@app.route("/api/return/<int:rental_id>", methods=["PUT"])
+def return_film(rental_id):
+    connection = get_db_connection()
+    cursor = connection.cursor()
+
+    cursor.execute("UPDATE rental SET return_date=NOW() WHERE rental_id=%s", (rental_id,))
+    connection.commit()
+
+    cursor.close()
+    connection.close()
+    return jsonify({"message": "Film returned"})
+
+#customer info
+@app.route("/api/customers/<int:customer_id>")
+def get_customer_rental_history(customer_id):
+    connection = get_db_connection()
+    cursor = connection.cursor(dictionary=True)
+
+    cursor.execute("""
+        SELECT customer_id, first_name, last_name, email, active
+        FROM customer
+        WHERE customer_id = %s
+    """, (customer_id,))
+    customer = cursor.fetchone()
+
+    #Rental history
+    cursor.execute("""
+        SELECT 
+            r.rental_id,
+            f.title,
+            r.rental_date,
+            r.return_date,
+            CONCAT(s.first_name, ' ', s.last_name) AS staff_name
+        FROM rental r
+        JOIN inventory i ON r.inventory_id = i.inventory_id
+        JOIN film f ON i.film_id = f.film_id
+        JOIN staff s ON r.staff_id = s.staff_id
+        WHERE r.customer_id = %s
+        ORDER BY r.rental_date DESC
+    """, (customer_id,))
+    rental_history = cursor.fetchall()
+
+    cursor.close()
+    connection.close()
+
+    if not customer:
+        return jsonify({"error": "Customer not found"}), 404
+
+    return jsonify({
+        "customer": customer,
+        "rental_history": rental_history
+    })
+
 
 if __name__ == "__main__":
     app.run(debug=True)
